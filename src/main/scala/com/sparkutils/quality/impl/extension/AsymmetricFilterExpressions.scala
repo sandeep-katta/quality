@@ -4,8 +4,9 @@ import com.sparkutils.quality.PredicateHelperPlus
 import com.sparkutils.quality.impl.UUIDToLongsExpression
 import com.sparkutils.quality.impl.id.{AsBase64Fields, AsBase64Struct, IDFromBase64, IDToRawIDDataType, SizeOfIDString}
 import com.sparkutils.quality.impl.longPair.AsUUID
+import org.apache.spark.internal.Logging
 import org.apache.spark.sql.catalyst.expressions.{And, BinaryComparison, CreateNamedStruct, CreateStruct, EqualNullSafe, EqualTo, Equality, Expression, GetStructField, GreaterThan, GreaterThanOrEqual, If, In, LessThan, LessThanOrEqual, Literal, Or}
-import org.apache.spark.sql.catalyst.plans.logical.{ConstraintHelper, Filter, Join, LogicalPlan}
+import org.apache.spark.sql.catalyst.plans.logical._
 import org.apache.spark.sql.catalyst.rules.Rule
 import org.apache.spark.sql.types.StringType
 
@@ -28,7 +29,7 @@ import org.apache.spark.sql.types.StringType
  * Only In and BinaryComparison's are supported currently
  */
 abstract class AsymmetricFilterExpressions extends Rule[LogicalPlan]
-  with PredicateHelperPlus with ConstraintHelper {
+  with PredicateHelperPlus with ConstraintHelper with Logging {
 
   /**
    * Should the matchOnExpression be defined in a filter provide the rewrite.  It's possible for joins that both comparedTo AND generating are the
@@ -67,6 +68,7 @@ abstract class AsymmetricFilterExpressions extends Rule[LogicalPlan]
   }
 
   class FilterTransformer(topPlan: LogicalPlan) {
+
     def unapply(plan: LogicalPlan): Option[(Expression, LogicalPlan)] =
       plan match {
         case Filter(expr, child) =>
@@ -97,15 +99,33 @@ abstract class AsymmetricFilterExpressions extends Rule[LogicalPlan]
       }
   }
 
+  private def skipLimits(plan: LogicalPlan): LogicalPlan = {
+
+    def matches(node: LogicalPlan): Boolean = node match {
+      case _: GlobalLimit | _: LocalLimit  => true
+      case _ => false
+    }
+    var node = plan
+    while (matches(node)) {
+      node = node.children.head
+    }
+    node
+  }
+
   def apply(plan: LogicalPlan): LogicalPlan = {
-    val FilterT = new FilterTransformer(plan)
+    logError(s"Initial Plan is ******** $plan")
+
+    val FilterT = new FilterTransformer(skipLimits(plan))
+    // To-do ?
     val JoinT = new JoinTransformer(plan)
-    plan transform {
+    val changedPlan = plan transform {
       case FilterT(resulting, child) =>
         Filter(resulting, child)
       case JoinT(join) =>
         join
     }
+    logError(s"changedPlan Plan is ******** $changedPlan")
+    changedPlan
   }
 
 }
